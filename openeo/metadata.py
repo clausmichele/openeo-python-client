@@ -61,7 +61,7 @@ class SpatialDimension(Dimension):
     def __init__(
         self,
         name: str,
-        extent: Union[Tuple[float, float], List[float]],
+        extent: Union[Tuple[float, float], List[float]] = [None,None],
         crs: Union[str, int, dict] = DEFAULT_CRS,
         step=None,
         axis=None,
@@ -633,7 +633,7 @@ def metadata_from_stac(url: str) -> CubeMetadata:
                 return spatial_dims
             else:
                 # If cube:dimensions is present but no spatial dimensions, use the default
-                return [SpatialDimension(name="y",extent=[None,None]),SpatialDimension(name="x",extent=[None,None])]
+                return [SpatialDimension(name="y"),SpatialDimension(name="x")]
 
 
     def get_band_metadata(eo_bands_location: dict) -> List[Band]:
