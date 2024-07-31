@@ -553,7 +553,12 @@ def metadata_from_stac(url: str) -> CubeMetadata:
         # Dimension info is in `cube:dimensions`
         # Check if the datacube extension is present
         if spec.ext.has("cube"):
-             return TemporalDimension(**dict(zip(["name","extent"],[(n, d.extent) for (n, d) in spec.ext.cube.dimensions.items() if d.dim_type =="temporal"][0])))
+            temporal_dims = [(n, d.extent) for (n, d) in spec.ext.cube.dimensions.items() if d.dim_type =="temporal"]
+            if len(temporal_dims)>0:
+                return TemporalDimension(**dict(zip(["name","extent"],temporal_dims[0])))
+            else:
+                complain("No cube:dimensions temporal metadata")
+                return TemporalDimension(name="t", extent=[None, None])
         else:
             complain("No cube:dimensions metadata")
             return TemporalDimension(name="t", extent=[None, None])
@@ -578,7 +583,12 @@ def metadata_from_stac(url: str) -> CubeMetadata:
         # Check if the datacube extension is present
         if _PYSTAC_1_9_EXTENSION_INTERFACE:
             if spec.ext.has("cube"):
-                 return [n for (n, d) in spec.ext.cube.dimensions.items() if d.dim_type == "bands"][0]
+                bands_dims = [n for (n, d) in spec.ext.cube.dimensions.items() if d.dim_type == "bands"]
+                if len(bands_dims)>0:
+                    return bands_dims[0]
+                else:
+                    complain("No cube:dimensions bands metadata")
+                    return "bands"
             else:
                 complain("No cube:dimensions metadata")
                 return "bands"
