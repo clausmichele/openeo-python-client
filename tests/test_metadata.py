@@ -873,7 +873,7 @@ def test_metadata_from_stac(tmp_path, test_stac, expected):
                       "extent": [-90.0,90.0],
                       "reference_system": 4326
                     },
-                    "bands": {
+                    "band": {
                       "type": "bands",
                       "values": ["B01","B02",]
                     },
@@ -886,7 +886,7 @@ def test_metadata_from_stac(tmp_path, test_stac, expected):
                 "summaries": {"eo:bands": [{"name": "B01"}, {"name": "B02"}]},
                 "stac_extensions": ["https://stac-extensions.github.io/datacube/v2.2.0/schema.json"],
             },
-            ["bands","time"],
+            ["band","time"],
         )
     ]
 )
