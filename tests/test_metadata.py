@@ -861,19 +861,19 @@ def test_metadata_from_stac(tmp_path, test_stac, expected):
                     "temporal": {"interval": [["2020-01-01T00:00:00Z", "2020-01-10T00:00:00Z"]]},
                 },
                 "cube:dimensions": {
-                    "x": {
+                    "lon": {
                       "axis": "x",
                       "type": "spatial",
                       "extent": [180.0,-180.0],
                       "reference_system": 4326
                     },
-                    "y": {
+                    "lat": {
                       "axis": "y",
                       "type": "spatial",
                       "extent": [-90.0,90.0],
                       "reference_system": 4326
                     },
-                    "band": {
+                    "bands": {
                       "type": "bands",
                       "values": ["B01","B02",]
                     },
@@ -886,7 +886,7 @@ def test_metadata_from_stac(tmp_path, test_stac, expected):
                 "summaries": {"eo:bands": [{"name": "B01"}, {"name": "B02"}]},
                 "stac_extensions": ["https://stac-extensions.github.io/datacube/v2.2.0/schema.json"],
             },
-            ["band","time"],
+            ["bands","time","lat","lon"],
         )
     ]
 )
@@ -895,8 +895,10 @@ def test_metadata_from_stac_dim_names(tmp_path, test_stac_dims, expected_dims):
     path = tmp_path / "stac.json"
     path.write_text(json.dumps(test_stac_dims))
     metadata = metadata_from_stac(path)
-    assert metadata.temporal_dimension.name == expected_dims[1]
     assert metadata.band_dimension.name == expected_dims[0]
+    assert metadata.temporal_dimension.name == expected_dims[1]
+    assert metadata.vertical_spatial_dimension.name == expected_dims[2]
+    assert metadata.horizontal_spatial_dimension.name == expected_dims[3]
 
 
 @pytest.mark.skipif(not _PYSTAC_1_9_EXTENSION_INTERFACE, reason="Requires PySTAC 1.9+ extension interface")

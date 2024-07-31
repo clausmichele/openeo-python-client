@@ -64,6 +64,7 @@ class SpatialDimension(Dimension):
         extent: Union[Tuple[float, float], List[float]],
         crs: Union[str, int, dict] = DEFAULT_CRS,
         step=None,
+        axis=None,
     ):
         """
 
@@ -76,9 +77,10 @@ class SpatialDimension(Dimension):
         self.extent = extent
         self.crs = crs
         self.step = step
+        self.axis = axis
 
     def rename(self, name) -> Dimension:
-        return SpatialDimension(name=name, extent=self.extent, crs=self.crs, step=self.step)
+        return SpatialDimension(name=name, extent=self.extent, crs=self.crs, step=self.step, axis=self.axis)
 
 
 class TemporalDimension(Dimension):
@@ -280,6 +282,14 @@ class CubeMetadata:
     @property
     def spatial_dimensions(self) -> List[SpatialDimension]:
         return [d for d in self._dimensions if isinstance(d, SpatialDimension)]
+
+    @property
+    def horizontal_spatial_dimension(self) -> SpatialDimension:
+        return [d for d in self._dimensions if isinstance(d, SpatialDimension) and d.axis=="x"][0]
+
+    @property
+    def vertical_spatial_dimension(self) -> SpatialDimension:
+        return [d for d in self._dimensions if isinstance(d, SpatialDimension) and d.axis=="y"][0]
 
     @property
     def bands(self) -> List[Band]:
@@ -589,6 +599,42 @@ def metadata_from_stac(url: str) -> CubeMetadata:
             # If cube:dimensions is present but no bands dimension, use the default
             return "bands"
 
+    def get_spatial_dims(spec: Union(pystac.Collection,pystac.Item, pystac.Catalog), complain: Callable[[str], None] = warnings.warn) -> List[SpatialDimension]:
+        # Dimension info is in `cube:dimensions`
+        # Check if the datacube extension is present
+        if _PYSTAC_1_9_EXTENSION_INTERFACE:
+            if spec.ext.has("cube"):
+                return [SpatialDimension(name=n,extent=d.extent,
+                                         crs=d.reference_system,
+                                         step=d.step,
+                                         axis=d.axis)
+                        for (n, d) in spec.ext.cube.dimensions.items() if d.dim_type == "spatial"]
+            else:
+                complain("No cube:dimensions metadata")
+                return []
+            # SpatialDimension(name=name, extent=self.extent, crs=self.crs, step=self.step)
+        else:
+            # Dimension info is in `cube:dimensions` (or 0.4-style `properties/cube:dimensions`)
+            cube_dimensions = (
+                deep_get(spec, "cube:dimensions", default=None)
+                or deep_get(spec, "properties", "cube:dimensions", default=None)
+                or {}
+            )
+            if not cube_dimensions:
+                complain("No cube:dimensions metadata")
+                return [SpatialDimension(name="y"),SpatialDimension(name="x")]
+
+            spatial_dims = [SpatialDimension(name=n,extent=d.get("extent"),
+                                         crs=d.get("reference_system", SpatialDimension.DEFAULT_CRS),
+                                         step=d.get("step", None),
+                                         axis=d.get("axis", None))
+                        for (n, d) in cube_dimensions.items() if d.dim_type == "spatial"]
+            if len(spatial_dims)!=0:
+                return spatial_dims
+            else:
+                # If cube:dimensions is present but no spatial dimensions, use the default
+                return [SpatialDimension(name="y",extent=[None,None]),SpatialDimension(name="x",extent=[None,None])]
+
 
     def get_band_metadata(eo_bands_location: dict) -> List[Band]:
         # TODO: return None iso empty list when no metadata?
@@ -644,7 +690,8 @@ def metadata_from_stac(url: str) -> CubeMetadata:
     # TODO: conditionally include band dimension when there was actual indication of band metadata?
     band_dimension_name = get_bands_dim_name(stac_object)
     band_dimension = BandDimension(name=band_dimension_name, bands=bands)
-    metadata = CubeMetadata(dimensions=[band_dimension, temporal_dimension])
+    spatial_dimensions = get_spatial_dims(stac_object)
+    metadata = CubeMetadata(dimensions=[band_dimension, temporal_dimension, *spatial_dimensions])
     return metadata
 
 
