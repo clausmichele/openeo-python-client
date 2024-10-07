@@ -226,31 +226,41 @@ class LocalConnection():
         if properties is not None:
             arguments["properties"] = properties
         cube = self.datacube_from_process(process_id="load_stac", **arguments)
-        # detect actual metadata from URL
-        # run load_stac to get the datacube metadata
-        if spatial_extent is not None:
-            arguments["spatial_extent"] = BoundingBox.parse_obj(spatial_extent)
-        if temporal_extent is not None:
-            arguments["temporal_extent"] = TemporalInterval.parse_obj(temporal_extent)
-        xarray_cube = load_stac(**arguments)
-        attrs = xarray_cube.attrs
-        for at in attrs:
-            # allowed types: str, Number, ndarray, number, list, tuple
-            if not isinstance(attrs[at], (int, float, str, np.ndarray, list, tuple)):
-                attrs[at] = str(attrs[at])
-        metadata = CollectionMetadata(
-            attrs,
-            dimensions=[
-                SpatialDimension(name=xarray_cube.openeo.x_dim, extent=[]),
-                SpatialDimension(name=xarray_cube.openeo.y_dim, extent=[]),
-                TemporalDimension(name=xarray_cube.openeo.temporal_dims[0], extent=[]),
-                BandDimension(
-                    name=xarray_cube.openeo.band_dims[0],
-                    bands=[Band(name=x) for x in xarray_cube[xarray_cube.openeo.band_dims[0]].values],
-                ),
-            ],
+        # # detect actual metadata from URL
+        # # run load_stac to get the datacube metadata
+        # if spatial_extent is not None:
+        #     arguments["spatial_extent"] = BoundingBox.parse_obj(spatial_extent)
+        # if temporal_extent is not None:
+        #     arguments["temporal_extent"] = TemporalInterval.parse_obj(temporal_extent)
+        # xarray_cube = load_stac(**arguments)
+        # attrs = xarray_cube.attrs
+        # for at in attrs:
+        #     # allowed types: str, Number, ndarray, number, list, tuple
+        #     if not isinstance(attrs[at], (int, float, str, np.ndarray, list, tuple)):
+        #         attrs[at] = str(attrs[at])
+        # metadata = CollectionMetadata(
+        #     attrs,
+        #     dimensions=[
+        #         SpatialDimension(name=xarray_cube.openeo.x_dim, extent=[]),
+        #         SpatialDimension(name=xarray_cube.openeo.y_dim, extent=[]),
+        #         TemporalDimension(name=xarray_cube.openeo.temporal_dims[0], extent=[]),
+        #         BandDimension(
+        #             name=xarray_cube.openeo.band_dims[0],
+        #             bands=[Band(name=x) for x in xarray_cube[xarray_cube.openeo.band_dims[0]].values],
+        #         ),
+        #     ],
+        # )
+        # cube.metadata = metadata
+        from openeo.metadata import (
+            Band,
+            BandDimension,
+            CollectionMetadata,
+            SpatialDimension,
+            TemporalDimension,
+            metadata_from_stac,
         )
-        cube.metadata = metadata
+
+        cube.metadata = metadata_from_stac(url)
         return cube
 
     def list_udf_runtimes(self) -> dict:
@@ -282,4 +292,44 @@ class LocalConnection():
         if auto_decode is not True:
             raise ValueError("LocalConnection requires auto_decode=True")
         process_graph = as_flat_graph(process_graph)
-        return OpenEOProcessGraph(process_graph).to_callable(PROCESS_REGISTRY)()
+
+        # Optimize the process graph
+        # 1. If the first node is load_stac and the following is resample_spatial, set the resolution and projection
+        # directly in load_stac, so that if data pyramids are available (COG), they are used automatically
+        pg = OpenEOProcessGraph(process_graph)
+        nodes_to_mod = []
+        for n in pg.G.nodes:
+            if pg.G.nodes[n]["process_id"] == "resample_spatial":
+                print("Check if the parent node is a load_stac")
+                if "loadstac" in (pg.G.nodes[n]["resolved_kwargs"]["data"].from_node):
+                    load_stac_node = pg.G.nodes[n]["resolved_kwargs"]["data"].from_node.split("-")[0]
+                    resample_spatial_node = n.split("-")[0]
+                    print("modify load_stac and remove resample_spatial")
+                    resolution = pg.G.nodes[n]["resolved_kwargs"]["resolution"]
+                    projection = pg.G.nodes[n]["resolved_kwargs"]["projection"]
+                    resampling = pg.G.nodes[n]["resolved_kwargs"]["method"]
+                    if resampling == "near":
+                        resampling = "nearest"
+                print("Check if it is a result node")
+                result_node = False
+                if pg.G.nodes[n]["result"]:
+                    result_node = True
+                nodes_to_mod.append([result_node,load_stac_node,resample_spatial_node,resolution,projection,resampling])
+
+        # We need to modify the load_stac process, remove the resample_spatial process, set result=True in load_stac if result_node=True,
+        # if not we need to modify the "from_node" of the subsequent process.
+        for n in nodes_to_mod:
+            process_graph[n[1]]["arguments"]["resolution"] = n[3]
+            process_graph[n[1]]["arguments"]["projection"] = n[4]
+            process_graph[n[1]]["arguments"]["resampling"] = n[5]
+            process_graph.pop(n[2])
+            if n[0]:
+                process_graph[n[1]]["result"] = True
+            import json
+            process_graph_string = json.dumps(process_graph)
+            process_graph_string.replace(n[2],n[1])
+            process_graph = json.loads(process_graph_string)
+
+        pg = OpenEOProcessGraph(process_graph)
+
+        return pg.to_callable(PROCESS_REGISTRY)()
