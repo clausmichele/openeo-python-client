@@ -327,7 +327,7 @@ class LocalConnection():
                 process_graph[n[1]]["result"] = True
             import json
             process_graph_string = json.dumps(process_graph)
-            process_graph_string.replace(n[2],n[1])
+            process_graph_string = process_graph_string.replace(n[2],n[1])
             process_graph = json.loads(process_graph_string)
 
         pg = OpenEOProcessGraph(process_graph)
