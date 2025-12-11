@@ -5,6 +5,7 @@ from typing import List
 import rioxarray
 import xarray as xr
 from pyproj import Transformer
+import geopandas as gpd
 
 _log = logging.getLogger(__name__)
 
@@ -24,17 +25,31 @@ def _get_netcdf_zarr_metadata(file_path):
         data = xr.open_dataset(file_path.as_posix(),chunks={}) # Add decode_coords='all' if the crs as a band gives some issues
     file_path = file_path.as_posix()
     try:
-        t_dim = _get_dimension(data.dims, ['t', 'time', 'temporal', 'DATE'])
-    except Exception:
-        t_dim = None
-    try:
-        x_dim = _get_dimension(data.dims, ['x', 'X', 'lon', 'longitude'])
-        y_dim = _get_dimension(data.dims, ['y', 'Y', 'lat', 'latitude'])
+        try:
+            t_dim = _get_dimension(data.dims, ['t', 'time', 'temporal', 'DATE'])
+        except Exception as e:
+            t_dim = None
+            _log.warning(e)
+        try:
+            x_dim = _get_dimension(data.dims, ['x', 'X', 'lon', 'longitude'])
+        except Exception as e:
+            x_dim = None
+            _log.warning(e)
+        try:
+            y_dim = _get_dimension(data.dims, ['y', 'Y', 'lat', 'latitude'])
+        except Exception as e:
+            y_dim = None
+            _log.warning(e)
+        try:
+            geometry_dim = _get_dimension(data.dims, ['cells', 'cell_id', 'cell_ids', 'geometry'])
+        except Exception as e:
+            geometry_dim = None
+            _log.warning(e)
     except Exception as e:
         _log.warning(e)
         raise Exception(f'Error creating metadata for {file_path}') from e
     metadata = {}
-    metadata['stac_version'] = '1.0.0-rc.2'
+    metadata['stac_version'] = '1.0.0'
     metadata['type'] = 'Collection'
     metadata['id'] = file_path
     data_attrs_lowercase = [x.lower() for x in data.attrs]
@@ -67,24 +82,50 @@ def _get_netcdf_zarr_metadata(file_path):
         metadata['links'] = data.attrs[data_attrs['links']]
     else:
         metadata['links'] = ''
-    x_min = data[x_dim].min().item(0)
-    x_max = data[x_dim].max().item(0)
-    y_min = data[y_dim].min().item(0)
-    y_max = data[y_dim].max().item(0)
+    
+    if x_dim is not None and y_dim is not None:
+        x_min = data[x_dim].min().item(0)
+        x_max = data[x_dim].max().item(0)
+        y_min = data[y_dim].min().item(0)
+        y_max = data[y_dim].max().item(0)
+    elif geometry_dim is not None:
+        try:
+            import xdggs
+            data = data.pipe(xdggs.decode)
+            # cell_boundaries = data.dggs.cell_boundaries()
+            # bounds = gpd.GeoSeries(cell_boundaries.values).total_bounds
+            # x_min = bounds[0]
+            # x_max = bounds[2]
+            # y_min = bounds[1]
+            # y_max = bounds[3]
+            
+            cell_centers = data.dggs.cell_centers()
+
+            x_min = cell_centers.latitude.min().values.item()
+            x_max = cell_centers.latitude.max().values.item()
+            y_min = cell_centers.longitude.min().values.item() - 360
+            y_max = cell_centers.longitude.max().values.item() - 360
+
+            data.rio.write_crs(4326,inplace=True)
+        except Exception as e:
+            # raise Exception("Could not extract the spatial extent of the data!")
+            raise Exception(e)
 
     crs_present = False
     bands = list(data.data_vars)
     if 'crs' in bands:
+        crs = data.crs.attrs["crs_wkt"]
         bands.remove('crs')
+        crs_present = True
+    elif data.rio.crs:
+        crs = data.rio.crs
         crs_present = True
     extent = {}
     if crs_present:
-        if "crs_wkt" in data.crs.attrs:
-            transformer = Transformer.from_crs(data.crs.attrs["crs_wkt"], "epsg:4326")
+            transformer = Transformer.from_crs(crs, "epsg:4326")
             lat_min, lon_min = transformer.transform(x_min, y_min)
             lat_max, lon_max = transformer.transform(x_max, y_max)
             extent["spatial"] = {"bbox": [[lon_min, lat_min, lon_max, lat_max]]}
-
     if t_dim is not None:
         t_min = str(data[t_dim].min().values)
         t_max = str(data[t_dim].max().values)
@@ -96,18 +137,27 @@ def _get_netcdf_zarr_metadata(file_path):
     if t_dim is not None:
         t_dimension = {t_dim: {'type': 'temporal', 'extent':[t_min,t_max]}}
 
-    x_dimension = {x_dim: {'type': 'spatial','axis':'x','extent':[x_min,x_max]}}
-    y_dimension = {y_dim: {'type': 'spatial','axis':'y','extent':[y_min,y_max]}}
-    if crs_present:
-        if 'crs_wkt' in data.crs.attrs:
-            x_dimension[x_dim]['reference_system'] = data.crs.attrs['crs_wkt']
-            y_dimension[y_dim]['reference_system'] = data.crs.attrs['crs_wkt']
+    x_dimension = {}
+    if x_dim is not None:
+        x_dimension = {x_dim: {'type': 'spatial','axis':'x','extent':[x_min,x_max]}}
+        if crs_present:
+            x_dimension[x_dim]['reference_system'] = str(crs)
+
+    y_dimension = {}
+    if y_dim is not None:
+        y_dimension = {y_dim: {'type': 'spatial','axis':'y','extent':[y_min,y_max]}}
+        if crs_present:
+            y_dimension[y_dim]['reference_system'] = str(crs)
+
+    geometry_dimension = {}
+    if geometry_dim is not None:
+        geometry_dimension = {geometry_dim: {'type': 'geometry','bbox': [[y_min, x_min, y_max, x_max]]}}
 
     b_dimension = {}
     if len(bands)>0:
         b_dimension = {'bands': {'type': 'bands', 'values':bands}}
 
-    metadata['cube:dimensions'] = {**t_dimension,**x_dimension,**y_dimension,**b_dimension}
+    metadata['cube:dimensions'] = {**t_dimension,**x_dimension,**y_dimension,**geometry_dimension,**b_dimension}
 
     return metadata
 
